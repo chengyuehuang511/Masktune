@@ -25,6 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
+import sys
 
 
 __all__ = ['ResNet', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet1202']
@@ -111,6 +112,36 @@ class ResNet(nn.Module):
 
     def get_grad_cam_target_layer(self):
         return self.layer3[-1]
+    
+    # not sure if correct
+    def get_feature(self, x, feat_type='top'):
+        if feat_type == 'x':
+            return x.view(x.size(0), -1)
+        elif feat_type == 'top':
+            out = F.relu(self.bn1(self.conv1(x)))
+            out = self.layer1(out)
+            out = self.layer2(out)
+            out = self.layer3(out)
+            out = F.avg_pool2d(out, out.size()[3])
+            out = out.view(out.size(0), -1)
+            return out
+        elif feat_type == 'all':
+            out_list = []
+            out = F.relu(self.bn1(self.conv1(x)))
+            out_list.append(out.view(out.size(0), -1))
+            out = self.layer1(out)
+            out_list.append(out.view(out.size(0), -1))
+            out = self.layer2(out)
+            out_list.append(out.view(out.size(0), -1))
+            out = self.layer3(out)
+            out_list.append(out.view(out.size(0), -1))
+            out = F.avg_pool2d(out, out.size()[3])
+            out_list.append(out.view(out.size(0), -1))
+            
+            out_list = torch.cat(out_list, dim=1)
+            return out_list
+        else:
+            sys.exit(1)
 
 
 def resnet20():

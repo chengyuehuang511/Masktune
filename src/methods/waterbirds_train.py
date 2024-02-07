@@ -10,6 +10,9 @@ import torch.nn.functional as F
 
 import torch
 import os
+import pandas as pd
+
+from src.similarity_based_explanation.metrics import cossim, l2sim, dotprod
 
 
 class WaterbirdsTrain(TrainBaseMethod):
@@ -104,6 +107,42 @@ class WaterbirdsTrain(TrainBaseMethod):
         all_predictions = torch.cat(all_predictions)
         all_aux_labels = torch.cat(all_aux_labels)
         all_labels = torch.cat(all_labels)
+        ###
+        train_labels = []
+        train_aux_labels = []
+        for data in self.train_loader:
+            labels, aux_labels = data[2], data[-1]
+            # labels, aux_labels = labels.to(self.device), aux_labels.to(self.device)
+            train_labels.append(labels)
+            train_aux_labels.append(aux_labels)
+        train_labels = torch.cat(train_labels)
+        train_aux_labels = torch.cat(train_aux_labels)
+
+        if self.args.print_detail:
+            d = {}
+            d['labels'] = all_labels.cpu()
+            d['predictions'] = all_predictions.cpu()
+            d['aux_labels'] = all_aux_labels.cpu()
+
+            # similarity
+            similarity_l2sim = self.get_relevance_by_hsim(data_loader, sim_func=l2sim)
+            similarity_cossim = self.get_relevance_by_hsim(data_loader, sim_func=cossim)
+            similarity_dotprod = self.get_relevance_by_hsim(data_loader, sim_func=dotprod)
+
+            for name, similarity in zip(["dotprod", "cossim", "l2sim"], [similarity_dotprod, similarity_cossim, similarity_l2sim]):
+                assert similarity.shape[0] == len(all_labels)
+                train_rank_top = similarity.argmax(dim=1, keepdim=False)
+                train_rank_top_label = [train_labels[i].item() for i in train_rank_top]
+                train_rank_top_aux_label = [train_aux_labels[i].item() for i in train_rank_top]
+
+                d['train_rank_top_' + name] = train_rank_top.cpu()
+                d['train_rank_top_label_' + name] = train_rank_top_label
+                d['train_rank_top_aux_label_' + name] = train_rank_top_aux_label
+            
+            df = pd.DataFrame(d)
+            df.to_csv('output.csv', index=True)
+            
+
         groups = {
             0: [],
             1: [],

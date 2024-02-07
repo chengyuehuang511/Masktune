@@ -39,12 +39,16 @@ def main(args):
             else:
                 method.test(method.finetuned_model_checkpoint_path)
         else:
-            method.train_erm()
+            method.train_erm(
+                best_resume_checkpoint_path=args.best_erm_model_checkpoint_path, 
+                last_resume_checkpoint_path=args.last_erm_model_checkpoint_path
+                )
             method.test(method.best_erm_model_checkpoint_path)
     else:
         if args.selective_classification:
             method.test_selective_classification(erm_model_checkpoint_path=args.best_erm_model_checkpoint_path, finetuned_model_checkpoint_path=args.finetuned_model_checkpoint_path)
         else:
+            # method.mask_data(erm_checkpoint_path=args.best_erm_model_checkpoint_path)
             method.test(args.best_erm_model_checkpoint_path)
 
 

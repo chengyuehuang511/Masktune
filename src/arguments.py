@@ -186,6 +186,16 @@ def add_masktune_args(parser: ArgumentParser) -> ArgumentParser:
         action="store_true",
         default=False,
     )    
+    parser.add_argument(
+        "--plot_heatmap",
+        action="store_true",
+        default=False,
+    )   
+    parser.add_argument(
+        "--print_detail",
+        action="store_true",
+        default=False,
+    )  
     return parser
 
 

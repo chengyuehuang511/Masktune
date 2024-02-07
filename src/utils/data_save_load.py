@@ -27,6 +27,25 @@ def apply_mask_and_save_images(image_masks, masked_data_save_dir, images_pathes,
     pool.close()
 
 
+def plot_heatmap_and_save_individual_image_in_png(heat_maps, heatmap_save_dir, target, image_path):
+    target_dir = os.path.join(heatmap_save_dir, str(target.item()))
+    os.makedirs(target_dir, exist_ok=True)
+    original_image = Image.open(image_path).convert('RGB')
+    heat_maps = np.expand_dims(cv2.resize(heat_maps, dsize=original_image.size, interpolation=cv2.INTER_NEAREST), axis=-1)
+    original_image = np.array(original_image) + heat_maps * 0.3
+    # original_image = heat_maps
+    im = Image.fromarray(original_image.astype(np.uint8))
+    im.save(os.path.join(target_dir, image_path.split("/")[-1]))
+
+
+
+def plot_heatmap_and_save_images(heat_maps, heatmap_save_dir, images_pathes, targets):
+    pool = Pool()
+    pool.starmap(plot_heatmap_and_save_individual_image_in_png, zip(
+        heat_maps, cycle([heatmap_save_dir]), targets, images_pathes))
+    pool.close()
+
+
 def save_checkpoint(
     model, optimizer, lr_scheduler, checkpoint_path: str, current_epoch, accuracy
 ):

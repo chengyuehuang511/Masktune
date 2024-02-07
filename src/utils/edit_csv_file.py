@@ -14,7 +14,8 @@ def write_config_to_csv(args, csv_file_path) -> None:
     else:
         df = pd.read_csv(csv_file_path, index_col=0, on_bad_lines='skip')
         if len(list(set(vars(args).keys()) - set(df.columns))) == 0:
-            df = df.append(vars(args), ignore_index=True)
+            # df = df.append(vars(args), ignore_index=True)
+            df = pd.concat([df, pd.DataFrame([vars(args)])], ignore_index=True)
             df.to_csv(csv_file_path)
             return df.index[-1]
         else:
@@ -24,7 +25,8 @@ def write_config_to_csv(args, csv_file_path) -> None:
             for column in columns_to_add:
                 data = [getattr(default_args, column)] * len(df.index)
                 df.insert(len(df.columns), column, data)
-            df = df.append(vars(args), ignore_index=True)
+            # df = df.append(vars(args), ignore_index=True)
+            df = pd.concat([df, pd.DataFrame([vars(args)])], ignore_index=True)
             df.to_csv(csv_file_path)
             return df.index[-1]
 

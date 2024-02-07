@@ -1,4 +1,5 @@
 import copy
+from PIL import Image
 import shutil
 from src.models import SmallCNN, ResNet50, resnet32, vgg16_bn
 from src.utils import (
@@ -8,10 +9,11 @@ from src.utils import (
     load_checkpoint,
     save_checkpoint,
     apply_mask_and_save_images,
+    plot_heatmap_and_save_images,
     select_device,
     Logger,
     write_config_to_csv,
-     update_dataset_and_dataloader,
+    update_dataset_and_dataloader,
     mask_heatmap_using_threshold
 )
 
@@ -30,6 +32,18 @@ import os
 import math
 import time
 import enum
+import sys
+import numpy as np
+import scipy
+
+from src.similarity_based_explanation.metrics import cossim, l2sim, dotprod
+
+is_print = True
+def _print(*args, **kwargs):
+    if is_print:
+        print(*args, **kwargs, file=sys.stderr)
+
+cashed = {}
 
 model_size_configuration = {
     'cifar10': {
@@ -90,9 +104,15 @@ class TrainBaseMethod(ABC):
         model_save_dir = os.path.join(self.run_dir, "checkpoints")
         os.makedirs(model_save_dir, exist_ok=True)
         self.model_save_dir = model_save_dir
+        
         masked_data_save_dir = os.path.join(self.run_dir, "masked_data", "1")
         os.makedirs(masked_data_save_dir, exist_ok=True)
         self.masked_data_save_dir = masked_data_save_dir
+
+        heatmap_save_dir = os.path.join(self.run_dir, "heatmaps", "1")
+        os.makedirs(heatmap_save_dir, exist_ok=True)
+        self.heatmap_save_dir = heatmap_save_dir
+
         self.best_erm_model_checkpoint_path = os.path.join(self.model_save_dir, "best_erm_model_checkpoint.pt")
         self.last_erm_model_checkpoint_path = os.path.join(self.model_save_dir, "last_erm_model_checkpoint.pt")
         self.finetuned_model_checkpoint_path = os.path.join(self.model_save_dir, "finetuned_model.pt")
@@ -412,9 +432,15 @@ class TrainBaseMethod(ABC):
             if self.args.accumulative_masking:
                 self.data_to_mask_dataset, self.data_to_mask_loader = update_dataset_and_dataloader(
                     self.data_to_mask_dataset, data_dir=self.masked_data_save_dir, batch_size=self.args.masking_batch_size, workers=self.args.workers)
+            
             masked_data_save_dir = os.path.join(self.run_dir, "masked_data", str(i+2))
             os.makedirs(masked_data_save_dir, exist_ok=True)
             self.masked_data_save_dir = masked_data_save_dir
+            
+            heatmap_save_dir = os.path.join(self.run_dir, "heatmaps", str(i+2))
+            os.makedirs(heatmap_save_dir, exist_ok=True)
+            self.heatmap_save_dir = heatmap_save_dir
+            
             self.mask_data(erm_checkpoint_path=self.finetuned_model_checkpoint_path)
             self.train_dataset, self.train_loader = update_dataset_and_dataloader(
                 self.train_dataset, data_dir=self.masked_data_save_dir, batch_size=self.args.train_batch, workers=self.args.workers)
@@ -440,17 +466,22 @@ class TrainBaseMethod(ABC):
         heat_map_generator = XGradCAM(
             model=self.model,
             target_layers=[self.model.module.get_grad_cam_target_layer()],
-            use_cuda=self.args.use_cuda,
+            # use_cuda=self.args.use_cuda,
         )
         masking_start_time = time.time()
         for data in tqdm(self.data_to_mask_loader):
             images, images_pathes, targets = data[0], data[1], data[2]
             images = images.to(self.device)
             heat_maps = heat_map_generator(images)
+            # original_image = Image.open(images_pathes[0]).convert('RGB')
             image_masks = mask_heatmap_using_threshold(heat_maps=heat_maps)
             apply_mask_and_save_images(
                 image_masks=image_masks, masked_data_save_dir=self.masked_data_save_dir, images_pathes=images_pathes, targets=targets
             )
+            if self.args.plot_heatmap:
+                plot_heatmap_and_save_images(
+                    heat_maps=heat_maps, heatmap_save_dir=self.heatmap_save_dir, images_pathes=images_pathes, targets=targets
+                )
         tqdm.write("Masking Time: {}".format(
             time.time() - masking_start_time))
 
@@ -546,5 +577,131 @@ class TrainBaseMethod(ABC):
                         e_cov, round((torch.sum(predicted_samples).item() / len(predicted_samples)) * 100.0, 2), 100 * round(error.item(), 4)
                     ),
                     print_msg=True
-                )
+                )        
+    
+
+    def get_relevance_by_hsim(self, data_loader, feat_type='top', sim_func=dotprod):
+        feature_sims_list = []
+        for test_data in tqdm(data_loader, leave=False):
+            test_inputs = test_data[0]
+            test_inputs = test_inputs.to(self.device)
+            
+            test_feature_sims = []
+            test_features = self.model.module.get_feature(test_inputs, feat_type=feat_type)
+            
+            for train_data in tqdm(self.train_loader, leave=False):
+                train_inputs = train_data[0]
+                train_inputs = train_inputs.to(self.device)
                 
+                train_features = self.model.module.get_feature(train_inputs, feat_type=feat_type)
+                test_feature_sims.append(sim_func(test_features, train_features).data)
+                 
+            test_feature_sims = torch.cat(test_feature_sims, dim=1)
+            feature_sims_list.append(test_feature_sims)
+        feature_sims_list = torch.cat(feature_sims_list, dim=0)
+        return feature_sims_list
+    
+
+    def get_flat_param(self):
+        # Concatenate all model parameters into a single vector
+        flat_params = torch.cat([p.view(-1) for p in self.model.module.parameters()], dim=0)
+        return flat_params
+
+    def get_flat_param_grad(self):
+        # Concatenate gradients of all model parameters into a single vector
+        # If p.grad is not None
+        flat_grads = torch.cat([p.grad.view(-1) for p in self.model.module.parameters()], dim=0)
+        return flat_grads
+
+    def get_grad_loss(self, test_data, targets):
+        self.optimizer.zero_grad()
+        output = self.model(test_data)
+        loss = self.loss_function(output, targets)
+        loss.backward()
+        grad = self.get_flat_param_grad()
+        grad_ = torch.autograd.grad(loss, self.model.module.parameters())  # , create_graph=True
+        return grad, grad_
+
+    def get_hessian(self, train_data, targets):
+        self.model.eval()
+        # First backprop
+        self.optimizer.zero_grad()
+        output = self.model(train_data)
+        loss = self.loss_function(output, targets)
+        loss.backward(create_graph=True)
+        grads = self.get_flat_param_grad()
+
+        hessian_list = []
+        for i, g in tqdm(enumerate(grads)):
+            self.optimizer.zero_grad()
+            g.backward(retain_graph=True if i < len(grads) - 1 else False)
+            hessian_list.append(self.get_flat_param_grad())
+        
+        hessian = torch.cat(hessian_list, dim=0)
+        return hessian
+    
+    def get_inverse_hvp(self, v, approx_type='cg', approx_params=None, verbose=True):
+        assert approx_type in ['cg', 'lissa']
+        if approx_type == 'lissa':
+            return self.get_inverse_hvp_lissa(v, **approx_params)
+        elif approx_type == 'cg':
+            return self.get_inverse_hvp_cg(v, verbose, **approx_params)
+        
+    
+
+    def get_relevance_by_grad(self, data_loader, sim_func=dotprod, matrix='none', approx_type='cg', approx_params={}):
+        test_grad = self.get_grad_loss(test_data)  #
+        test_grad = test_grad.astype(np.float64)
+        
+        if matrix == 'approx_hessian':
+            test_feature = self.get_inverse_hvp(test_grad, approx_type, approx_params)
+        
+        elif matrix == 'inv-hessian':
+            loss = self.__call__(*convertor(train_data, self.device), enable_double_backprop=True)
+            hessian = self.get_hessian(loss)
+            damped_hessian = hessian + np.mean(np.abs(hessian)) * approx_params.get('damping', 0) * np.identity(hessian.shape[0])
+            inv_hessian = np.linalg.inv(damped_hessian)
+            test_feature = np.matmul(inv_hessian, test_grad)
+        
+        elif matrix == 'inv_sqrt-hessian':
+            inv_hessian_fn = os.path.join(self.out_dir, 'inv-hessian-matrix.npy')
+            inv_hessian = np.load(inv_hessian_fn)
+            inv_sqrt_hessian = scipy.linalg.sqrtm(inv_hessian).real
+            test_feature = np.matmul(inv_sqrt_hessian, test_grad)
+
+            _train_feature_filename = os.path.join(self.out_dir, 'train-grad-on-loss-all.npy')
+            train_features = np.load(_train_feature_filename)
+            train_features = np.matmul(inv_sqrt_hessian, train_features.T).T
+        
+        elif matrix == 'inv-fisher':
+            train_grad_filename = os.path.join(self.out_dir, 'train-grad-on-loss-all.npy')
+            if not os.path.exists(train_grad_filename):
+                _print('must calculate train grads first')
+                sys.exit(1)
+            train_grads = np.load(train_grad_filename)
+            avg_grads = np.average(train_grads, axis=0)
+            fisher_matrix = []
+            for g in avg_grads:
+                fisher_matrix.append(g * avg_grads)
+            fisher = np.vstack(fisher_matrix)
+            damped_fisher = fisher + np.mean(np.abs(fisher)) * approx_params.get('damping', 0) * np.identity(fisher.shape[0])
+            inv_fisher = np.linalg.inv(damped_fisher)
+            test_feature = np.matmul(inv_fisher, test_grad)
+        
+        elif matrix == 'inv_sqrt-fisher':
+            inv_fisher_fn = os.path.join(self.out_dir, 'inv-fisher-matrix.npy')
+            inv_fisher = np.load(inv_fisher_fn)
+            inv_sqrt_fisher = scipy.linalg.sqrtm(inv_fisher).real
+            test_feature = np.matmul(inv_sqrt_fisher, test_grad)
+
+            _train_feature_filename = os.path.join(self.out_dir, 'train-grad-on-loss-all.npy')
+            train_features = np.load(_train_feature_filename)
+            train_features = np.matmul(inv_sqrt_fisher, train_features.T).T
+        
+        elif matrix == 'none':
+            test_feature = test_grad
+        
+        else:
+            sys.exit(1)
+        
+        return 

@@ -585,6 +585,12 @@ class TrainBaseMethod(ABC):
         for test_data in tqdm(data_loader, leave=False):
             test_inputs = test_data[0]
             test_inputs = test_inputs.to(self.device)
+
+            print("=====TEST GRAD LOSS=====")
+            targets = test_data[2].to(self.device)
+            tmp1, tmp2 = self.get_grad_loss(test_inputs, targets)
+            print(sum(tmp1 != tmp2))
+            # print(tmp1, tmp2)
             
             test_feature_sims = []
             test_features = self.model.module.get_feature(test_inputs, feat_type=feat_type)
@@ -617,9 +623,10 @@ class TrainBaseMethod(ABC):
         self.optimizer.zero_grad()
         output = self.model(test_data)
         loss = self.loss_function(output, targets)
-        loss.backward()
+        loss.backward(retain_graph=True)
         grad = self.get_flat_param_grad()
         grad_ = torch.autograd.grad(loss, self.model.module.parameters())  # , create_graph=True
+        grad_ = torch.cat([g.view(-1) for g in grad_], dim=0)
         return grad, grad_
 
     def get_hessian(self, train_data, targets):
@@ -640,13 +647,38 @@ class TrainBaseMethod(ABC):
         hessian = torch.cat(hessian_list, dim=0)
         return hessian
     
+    def compute_hessian(self, train_data, targets):
+        hessian = []
+
+        output = self.model(train_data)
+        loss = self.loss_function(output, targets)
+        grad_params = torch.autograd.grad(loss, self.model.module.parameters(), create_graph=True, allow_unused=True)
+
+        for grad in grad_params:
+            grad_grads = []
+            for param in self.model.module.parameters():
+                if grad is not None and param.requires_grad:
+                    # Compute the second-order derivative (Hessian component)
+                    grad_grad = torch.autograd.grad(grad, param, retain_graph=True, allow_unused=True)[0]
+                    if grad_grad is not None:
+                        grad_grads.append(grad_grad.view(-1))
+                    else:
+                        # Handling parameters that don't contribute to the model output
+                        grad_grads.append(torch.zeros(param.view(-1).size()))
+                else:
+                    # Handling parameters that don't contribute to the model output
+                    grad_grads.append(torch.zeros(param.view(-1).size()))
+            hessian.append(torch.cat(grad_grads))
+        hessian = torch.stack(hessian)
+        return hessian
+
+    
     def get_inverse_hvp(self, v, approx_type='cg', approx_params=None, verbose=True):
         assert approx_type in ['cg', 'lissa']
         if approx_type == 'lissa':
             return self.get_inverse_hvp_lissa(v, **approx_params)
         elif approx_type == 'cg':
             return self.get_inverse_hvp_cg(v, verbose, **approx_params)
-        
     
 
     def get_relevance_by_grad(self, data_loader, sim_func=dotprod, matrix='none', approx_type='cg', approx_params={}):

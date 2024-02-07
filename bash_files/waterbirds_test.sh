@@ -1,7 +1,7 @@
 #!/bin/bash
 cd /nethome/chuang475/flash/projects/Masktune
 
-/nethome/chuang475/miniconda3/envs/ftp/bin/python3.8 -m ipdb src/main.py \
+/nethome/chuang475/miniconda3/envs/ftp/bin/python3.8 -m src.main \
                     --dataset waterbirds \
                     --arch resnet50 \
                     --base_dir /nethome/chuang475/flash/ \

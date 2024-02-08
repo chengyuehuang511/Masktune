@@ -16,7 +16,8 @@ if __name__ == "__main__":
     for i, g in enumerate([output, g1, g2, g3, g4]):
         print(f"=====Group {i}=====")
         print("Prediction accuracy:", compare(g, 'labels', 'predictions'))
-        for a in ['labels', 'predictions', 'aux_labels']:
-            for b in ['train_rank_top_label', 'train_rank_top_aux_label']:
-                print(f"Compare {a} and {b}", compare(g, a, b))
+        for simfunc in ["dotprod", "cossim", "l2sim"]:
+            for a in ['labels', 'predictions', 'aux_labels']:
+                for b in ['train_rank_top_label_' + simfunc, 'train_rank_top_aux_label_' + simfunc]:
+                    print(f"Compare {a} and {b}", compare(g, a, b))
     

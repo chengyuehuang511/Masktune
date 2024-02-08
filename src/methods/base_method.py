@@ -20,6 +20,7 @@ from src.utils import (
 from pytorch_grad_cam import XGradCAM
 
 from torch import Tensor
+from torch.func import functional_call, vmap, grad
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 
@@ -231,7 +232,6 @@ class TrainBaseMethod(ABC):
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-
 
 
     def test(self, checkpoint_path=None):
@@ -585,13 +585,13 @@ class TrainBaseMethod(ABC):
         for test_data in tqdm(data_loader, leave=False):
             test_inputs = test_data[0]
             test_inputs = test_inputs.to(self.device)
-            
-            print("=====TEST Hessian LOSS=====")
+
+            print("=====TEST Grad LOSS=====")
             targets = test_data[2].to(self.device)
-            tmp1 = self.get_hessian(test_inputs, targets)
-            tmp2 = self.compute_hessian(test_inputs, targets)
+            # hessian = self.get_hessian(test_inputs, targets)
+            grad = self.get_grad_loss(test_inputs, targets)
             # print(sum(tmp1 != tmp2))
-            print(tmp1.shape, tmp2.shape)
+            print(grad.shape)
 
             test_feature_sims = []
             test_features = self.model.module.get_feature(test_inputs, feat_type=feat_type)
@@ -607,20 +607,33 @@ class TrainBaseMethod(ABC):
             feature_sims_list.append(test_feature_sims)
         feature_sims_list = torch.cat(feature_sims_list, dim=0)
         return feature_sims_list
-
-
-    def get_grad_loss(self, test_data, targets):
-        output = self.model(test_data)
-        loss = self.loss_function(output, targets)
-        grad = torch.autograd.grad(loss, self.model.module.parameters())
-        grad = torch.cat([g.view(-1) for g in grad], dim=0)
-        return grad
     
+
+    # per-sample gradient
+    def get_grad_loss(self, test_data, targets):
+        params = {k: v.detach() for k, v in self.model.module.named_parameters()}
+        buffers = {k: v.detach() for k, v in self.model.module.named_buffers()}
+        
+        def compute_loss(params, buffers, sample, target):
+            batch = sample.unsqueeze(0)
+            targets = target.unsqueeze(0)
+
+            predictions = functional_call(self.model.module, (params, buffers), (batch,))
+            loss = self.loss_function(predictions, targets)
+            return loss
+        
+        ft_compute_grad = grad(compute_loss)
+        ft_compute_sample_grad = vmap(ft_compute_grad, in_dims=(None, None, 0, 0))
+        ft_per_sample_grads = ft_compute_sample_grad(params, buffers, test_data, targets)
+
+        ft_per_sample_grads = torch.cat([g.view(g.shape[0], -1) for g in ft_per_sample_grads.values()], dim=1)
+        return ft_per_sample_grads
+    
+    # per-sample hessian
     def get_hessian(self, test_data, targets):
         output = self.model(test_data)
         loss = self.loss_function(output, targets)
         hessian = torch.autograd.functional.hessian(loss, self.model.module.parameters())
-        hessian = torch.cat([h.view(-1) for h in hessian], dim=0)
         return hessian
 
     

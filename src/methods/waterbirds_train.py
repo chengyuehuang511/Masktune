@@ -50,11 +50,11 @@ class WaterbirdsTrain(TrainBaseMethod):
                                     0.229, 0.224, 0.225])
         ])
         self.train_dataset = WaterbirdsDataset(raw_data_path=self.args.dataset_dir, root=os.path.join(
-            self.args.base_dir, 'datasets', 'Waterbirds'), split='train', transform=self.transform_train)
+            self.args.base_dir, 'datasets', 'Waterbirds'), split='train', transform=self.transform_train, return_places=True)
         self.train_loader = torch.utils.data.DataLoader(
             self.train_dataset, batch_size=self.args.train_batch, shuffle=True, num_workers=self.args.workers)
         self.val_dataset = WaterbirdsDataset(raw_data_path=self.args.dataset_dir, root=os.path.join(
-            self.args.base_dir, 'datasets', 'Waterbirds'), split='val', transform=self.transform_test)
+            self.args.base_dir, 'datasets', 'Waterbirds'), split='val', transform=self.transform_test, return_places=True)
         self.data_to_mask_dataset = WaterbirdsDataset(raw_data_path=self.args.dataset_dir, root=os.path.join(
             self.args.base_dir, 'datasets', 'Waterbirds'), split='train', transform=self.transform_data_to_mask)
         self.val_loader = torch.utils.data.DataLoader(
@@ -125,9 +125,9 @@ class WaterbirdsTrain(TrainBaseMethod):
             d['aux_labels'] = all_aux_labels.cpu()
 
             # similarity
-            similarity_l2sim = self.get_relevance_by_hsim(data_loader, sim_func=l2sim)
-            similarity_cossim = self.get_relevance_by_hsim(data_loader, sim_func=cossim)
-            similarity_dotprod = self.get_relevance_by_hsim(data_loader, sim_func=dotprod)
+            similarity_l2sim = self.get_relevance_by_hsim(data_loader, sim_func=l2sim, if_grad=True)
+            similarity_cossim = self.get_relevance_by_hsim(data_loader, sim_func=cossim, if_grad=True)
+            similarity_dotprod = self.get_relevance_by_hsim(data_loader, sim_func=dotprod, if_grad=True)
 
             for name, similarity in zip(["dotprod", "cossim", "l2sim"], [similarity_dotprod, similarity_cossim, similarity_l2sim]):
                 assert similarity.shape[0] == len(all_labels)
@@ -140,7 +140,7 @@ class WaterbirdsTrain(TrainBaseMethod):
                 d['train_rank_top_aux_label_' + name] = train_rank_top_aux_label
             
             df = pd.DataFrame(d)
-            df.to_csv('output.csv', index=True)
+            df.to_csv('output_grad_new.csv', index=True)
             
 
         groups = {
@@ -155,9 +155,12 @@ class WaterbirdsTrain(TrainBaseMethod):
         weighted_acc = 0
         accuracies = []
         for group_id, group_predictions in groups.items():
-            accuracy = sum(group_predictions)/len(group_predictions)
+            if len(group_predictions) == 0:
+                accuracy = 0
+            else: 
+                accuracy = sum(group_predictions)/len(group_predictions)
             accuracies.append(accuracy)
-            self.logger.info(f"accuracy of group {group_id+1}: {accuracy}", print_msg=True)
+            self.logger.info(f"accuracy of group {group_id+1} ({len(group_predictions)}): {accuracy}", print_msg=True)
             weighted_acc += accuracy*len(group_predictions)
         weighted_acc /= len(all_predictions)
         self.logger.info(f"average accuracy: {weighted_acc}", print_msg=True)
@@ -179,7 +182,9 @@ class WaterbirdsTrain(TrainBaseMethod):
             lr_scheduler=None,
             checkpoint_path=checkpoint_path,
         )
-        worst_acuracy = self.run_an_epoch_with_group(self.test_loader, epoch=0, mode=Mode.test)
+        # print(len(self.train_dataset.places), len(self.val_dataset.places), len(self.test_dataset.places))
+        # print(len(self.train_dataset), len(self.val_dataset), len(self.test_dataset))
+        worst_acuracy = self.run_an_epoch_with_group(self.test_loader, epoch=0, mode=Mode.test)  #
         change_column_value_of_existing_row(
             "accuracy",
             worst_acuracy,

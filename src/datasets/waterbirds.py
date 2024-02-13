@@ -88,6 +88,7 @@ class WaterbirdsDataset(Dataset):
                     os.path.join(masked_data_file_path, data_class, '*')))
                 self.masked_data_path += masked_class_image_file_paths
             self.targets += [target] * len(class_image_file_paths)
+        # print("=====", len(self.data_path))
 
 
     def __len__(self):
@@ -116,5 +117,6 @@ class WaterbirdsDataset(Dataset):
                 return img, img_file_path, target, masked_img, self.places[img_file_path.split('/')[-1]]
             return img, img_file_path, target, masked_img
         if self.return_places:
+            # print(img_file_path.split('/')[-1])
             return img, img_file_path, target, self.places[img_file_path.split('/')[-1]]
         return img, img_file_path, target

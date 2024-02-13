@@ -8,13 +8,13 @@ cd /nethome/chuang475/flash/projects/Masktune
                     --lr 0.001 \
                     --use_cuda \
                     --optimizer sgd \
-                    --train_batch 64 \
-                    --test_batch 64 \
+                    --train_batch 32 \
+                    --test_batch 32 \
                     --masking_batch 128 \
                     --epochs 300 \
                     --use_pretrained_weights \
                     --dataset_dir /nethome/chuang475/flash/datasets/Waterbirds/raw \
-                    --best_erm_model_checkpoint_path /nethome/chuang475/flash/runs/7/checkpoints/best_erm_model_checkpoint.pt \
+                    --best_erm_model_checkpoint_path /nethome/chuang475/flash/runs/142/checkpoints/best_erm_model_checkpoint.pt \
                     --print_detail
 
 # b /nethome/chuang475/flash/projects/Masktune/src/methods/base_method.py:589

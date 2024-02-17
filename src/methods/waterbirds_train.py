@@ -120,27 +120,36 @@ class WaterbirdsTrain(TrainBaseMethod):
 
         if self.args.print_detail:
             d = {}
-            d['labels'] = all_labels.cpu()
-            d['predictions'] = all_predictions.cpu()
-            d['aux_labels'] = all_aux_labels.cpu()
+            # d['labels'] = all_labels.cpu()
+            # d['predictions'] = all_predictions.cpu()
+            # d['aux_labels'] = all_aux_labels.cpu()
 
             # similarity
-            similarity_l2sim = self.get_relevance_by_hsim(data_loader, sim_func=l2sim, if_grad=True)
-            similarity_cossim = self.get_relevance_by_hsim(data_loader, sim_func=cossim, if_grad=True)
-            similarity_dotprod = self.get_relevance_by_hsim(data_loader, sim_func=dotprod, if_grad=True)
+            # similarity_l2sim = self.get_relevance_by_hsim(data_loader, sim_func=l2sim, if_grad=True)
+            # similarity_cossim = self.get_relevance_by_hsim(data_loader, sim_func=cossim, if_grad=True)
+            # similarity_dotprod = self.get_relevance_by_hsim(data_loader, sim_func=dotprod, if_grad=True)
 
-            for name, similarity in zip(["dotprod", "cossim", "l2sim"], [similarity_dotprod, similarity_cossim, similarity_l2sim]):
-                assert similarity.shape[0] == len(all_labels)
-                train_rank_top = similarity.argmax(dim=1, keepdim=False)
-                train_rank_top_label = [train_labels[i].item() for i in train_rank_top]
-                train_rank_top_aux_label = [train_aux_labels[i].item() for i in train_rank_top]
+            # for name, similarity in zip(["dotprod", "cossim", "l2sim"], [similarity_dotprod, similarity_cossim, similarity_l2sim]):
+            #     assert similarity.shape[0] == len(all_labels)
+            #     train_rank_top = similarity.argmax(dim=1, keepdim=False)
+            #     train_rank_top_label = [train_labels[i].item() for i in train_rank_top]
+            #     train_rank_top_aux_label = [train_aux_labels[i].item() for i in train_rank_top]
 
-                d['train_rank_top_' + name] = train_rank_top.cpu()
-                d['train_rank_top_label_' + name] = train_rank_top_label
-                d['train_rank_top_aux_label_' + name] = train_rank_top_aux_label
+            #     d['train_rank_top_' + name] = train_rank_top.cpu()
+            #     d['train_rank_top_label_' + name] = train_rank_top_label
+            #     d['train_rank_top_aux_label_' + name] = train_rank_top_aux_label
             
+            # feature norm
+            feat_norm = self.feat_norm(self.train_loader, if_grad=True, flatten=False)
+
+            d['labels'] = train_labels.cpu()
+            d['aux_labels'] = train_aux_labels.cpu()
+
+            # feat_norm = self.feat_norm(self.train_loader)
+            d['feat_norm'] = feat_norm.cpu()
+
             df = pd.DataFrame(d)
-            df.to_csv('output_grad_new.csv', index=True)
+            df.to_csv('output_grad_-1_train_2.csv', index=True)
             
 
         groups = {

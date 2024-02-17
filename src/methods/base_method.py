@@ -580,6 +580,22 @@ class TrainBaseMethod(ABC):
                 )        
     
 
+    def feat_norm(self, data_loader, feat_type='top', flatten=False, if_grad=False, choose_gradients="last_block"):
+        norm_list = []
+        for test_data in tqdm(data_loader, leave=False):
+            test_inputs, test_targets = test_data[0].to(self.device), test_data[2].to(self.device)
+            if if_grad:
+                test_features = self.get_grad_loss(test_inputs, test_targets, choose_gradients=choose_gradients, flatten=flatten)
+                norm = torch.norm(F.relu(test_features), dim=[3,4]).mean(1).mean(1)  # [128, 64, 3, 7, 7]
+            else:
+                test_features = self.model.module.get_feature(test_inputs, feat_type=feat_type, flatten=flatten)
+                # print(test_features.shape)
+                norm = torch.norm(F.relu(test_features), dim=[2,3]).mean(1)  # [128, 2048, 7, 7]
+            # print(norm.shape)
+            norm_list.append(norm.data)
+
+        return torch.cat(norm_list, dim=0)
+    
     def get_relevance_by_hsim(self, data_loader, feat_type='top', sim_func=dotprod, if_grad=False):
         feature_sims_list = []
         for test_data in tqdm(data_loader, leave=False):
@@ -594,14 +610,18 @@ class TrainBaseMethod(ABC):
 
             test_feature_sims = []
             if if_grad:
-                test_features = self.get_grad_loss(test_inputs, test_targets)
+                test_features = self.get_grad_loss(test_inputs, test_targets, choose_gradients="last_block", flatten=True)
+                # test_features_ = self.get_grad_loss_(test_inputs, test_targets, choose_gradients="all")
+                # print(test_features.shape)
+                # print(test_features.shape == test_features_.shape)
+                # print(test_features - test_features_)
             else:
                 test_features = self.model.module.get_feature(test_inputs, feat_type=feat_type)
             
             for train_data in tqdm(self.train_loader, leave=False):
                 train_inputs, train_targets = train_data[0].to(self.device), train_data[2].to(self.device)
                 if if_grad:
-                    train_features = self.get_grad_loss(train_inputs, train_targets)
+                    train_features = self.get_grad_loss(train_inputs, train_targets, choose_gradients="last_block", flatten=True)
                 else:
                     train_features = self.model.module.get_feature(train_inputs, feat_type=feat_type)
                 test_feature_sims.append(sim_func(test_features, train_features).data)
@@ -612,26 +632,69 @@ class TrainBaseMethod(ABC):
         return feature_sims_list
     
     # compute loss for per-sample quantities
-    def compute_loss(self, params, buffers, sample, target):
+    def compute_loss(self, params, buffers, sample, target, choose_gradients="last_block"):
         batch = sample.unsqueeze(0)
         targets = target.unsqueeze(0)
 
-        predictions = functional_call(self.model.module, (params, buffers), (batch,))
+        if choose_gradients == "all":
+            predictions = functional_call(self.model.module, (params, buffers), (batch,))
+        elif choose_gradients == "last_block":
+            predictions = functional_call(nn.Sequential(*list(self.model.module.children())[-1]), (params, buffers), (batch,))
+        else:
+            exit(1)
+        # print(predictions.shape)
         loss = self.loss_function(predictions, targets)
         return loss
 
     # per-sample gradient
-    def get_grad_loss(self, test_data, targets):
+    def get_grad_loss_(self, test_data, targets, choose_gradients="last_block"):
+        # last_block =  nn.Sequential(*list(self.model.module.children())[-1])
+        # params = {k: v.detach() for k, v in last_block.named_parameters()}
+        # buffers = {k: v.detach() for k, v in last_block.named_buffers()}
+        # ft_compute_grad = grad(self.compute_loss)
+        # ft_compute_sample_grad = vmap(ft_compute_grad, in_dims=(None, None, 0, 0, None))
+        # ft_per_sample_grads = ft_compute_sample_grad(params, buffers, test_data, targets, "all")
+        # ft_per_sample_grads_last = torch.cat([g.view(g.shape[0], -1) for g in ft_per_sample_grads.values()], dim=1)
+        # print(ft_per_sample_grads_last.shape)
+
         params = {k: v.detach() for k, v in self.model.module.named_parameters()}
         buffers = {k: v.detach() for k, v in self.model.module.named_buffers()}
         
         ft_compute_grad = grad(self.compute_loss)
-        ft_compute_sample_grad = vmap(ft_compute_grad, in_dims=(None, None, 0, 0))
-        ft_per_sample_grads = ft_compute_sample_grad(params, buffers, test_data, targets)
-
+        ft_compute_sample_grad = vmap(ft_compute_grad, in_dims=(None, None, 0, 0, None))
+        ft_per_sample_grads = ft_compute_sample_grad(params, buffers, test_data, targets, "all")
+        # print(ft_per_sample_grads)
         ft_per_sample_grads = torch.cat([g.view(g.shape[0], -1) for g in ft_per_sample_grads.values()], dim=1)
+        # print(ft_per_sample_grads.shape)
+
+        # assert ft_per_sample_grads_last == ft_per_sample_grads[:, ft_per_sample_grads_last.shape[1]]
+        if choose_gradients=="last_block":
+            return ft_per_sample_grads[:, -9408:]
         return ft_per_sample_grads
     
+    def get_grad_loss(self, test_data, targets, choose_gradients="last_block", flatten=False):
+        grads_list = []
+        loss_list = []
+        for i, (test_data_each, targets_each) in enumerate(zip(test_data, targets)):
+            test_data_each = test_data_each.unsqueeze(0)
+            targets_each = targets_each.unsqueeze(0)
+            predictions = self.model(test_data_each)
+            loss = self.loss_function(predictions, targets_each)
+            # print(loss)
+            if choose_gradients == "last_block":
+                block = nn.Sequential(*list(self.model.module.children())[-1:])
+                grads = torch.autograd.grad(loss, [param for param in block.parameters()])[0]
+            elif choose_gradients == "all":
+                grads = torch.autograd.grad(loss, [param for param in self.model.module.parameters()])[0]
+            
+            if flatten:
+                grads_list.append(grads.view(1, -1))
+            else:
+                grads_list.append(grads.unsqueeze(0))  # [64, 3, 7, 7] -> [1, 64, 3, 7, 7]
+        
+        grads_list = torch.cat(grads_list, dim=0)
+        # print(grads_list.shape)
+        return grads_list
 
     # per-sample hessian
     def get_hessian(self, test_data, targets):

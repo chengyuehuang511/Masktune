@@ -8,8 +8,8 @@ cd /nethome/chuang475/flash/projects/Masktune
                     --lr 0.001 \
                     --use_cuda \
                     --optimizer sgd \
-                    --train_batch 32 \
-                    --test_batch 32 \
+                    --train_batch 128 \
+                    --test_batch 128 \
                     --masking_batch 128 \
                     --epochs 300 \
                     --use_pretrained_weights \

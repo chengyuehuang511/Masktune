@@ -582,18 +582,25 @@ class TrainBaseMethod(ABC):
 
     def feat_norm(self, data_loader, feat_type='top', flatten=False, if_grad=False, choose_gradients="last_block"):
         norm_list = []
+        loss_list = []
         for test_data in tqdm(data_loader, leave=False):
             test_inputs, test_targets = test_data[0].to(self.device), test_data[2].to(self.device)
             if if_grad:
-                test_features = self.get_grad_loss(test_inputs, test_targets, choose_gradients=choose_gradients, flatten=flatten)
+                test_features, loss_test = self.get_grad_loss(test_inputs, test_targets, choose_gradients=choose_gradients, flatten=flatten)
                 norm = torch.norm(F.relu(test_features), dim=[3,4]).mean(1).mean(1)  # [128, 64, 3, 7, 7]
             else:
                 test_features = self.model.module.get_feature(test_inputs, feat_type=feat_type, flatten=flatten)
                 # print(test_features.shape)
                 norm = torch.norm(F.relu(test_features), dim=[2,3]).mean(1)  # [128, 2048, 7, 7]
+            
             # print(norm.shape)
             norm_list.append(norm.data)
 
+            if if_grad:
+                loss_list += loss_test
+
+        if if_grad:
+            return torch.cat(norm_list, dim=0), loss_list
         return torch.cat(norm_list, dim=0)
     
     def get_relevance_by_hsim(self, data_loader, feat_type='top', sim_func=dotprod, if_grad=False):
@@ -610,7 +617,7 @@ class TrainBaseMethod(ABC):
 
             test_feature_sims = []
             if if_grad:
-                test_features = self.get_grad_loss(test_inputs, test_targets, choose_gradients="last_block", flatten=True)
+                test_features, loss_test = self.get_grad_loss(test_inputs, test_targets, choose_gradients="last_block", flatten=True)
                 # test_features_ = self.get_grad_loss_(test_inputs, test_targets, choose_gradients="all")
                 # print(test_features.shape)
                 # print(test_features.shape == test_features_.shape)
@@ -621,7 +628,7 @@ class TrainBaseMethod(ABC):
             for train_data in tqdm(self.train_loader, leave=False):
                 train_inputs, train_targets = train_data[0].to(self.device), train_data[2].to(self.device)
                 if if_grad:
-                    train_features = self.get_grad_loss(train_inputs, train_targets, choose_gradients="last_block", flatten=True)
+                    train_features, loss_train = self.get_grad_loss(train_inputs, train_targets, choose_gradients="last_block", flatten=True)
                 else:
                     train_features = self.model.module.get_feature(train_inputs, feat_type=feat_type)
                 test_feature_sims.append(sim_func(test_features, train_features).data)
@@ -673,14 +680,15 @@ class TrainBaseMethod(ABC):
         return ft_per_sample_grads
     
     def get_grad_loss(self, test_data, targets, choose_gradients="last_block", flatten=False):
+        # print(self.model.training)  # false
         grads_list = []
         loss_list = []
-        for i, (test_data_each, targets_each) in enumerate(zip(test_data, targets)):
+        for i, (test_data_each, targets_each) in tqdm(enumerate(zip(test_data, targets)), leave=False):
             test_data_each = test_data_each.unsqueeze(0)
             targets_each = targets_each.unsqueeze(0)
             predictions = self.model(test_data_each)
             loss = self.loss_function(predictions, targets_each)
-            # print(loss)
+            loss_list.append(loss.item())
             if choose_gradients == "last_block":
                 block = nn.Sequential(*list(self.model.module.children())[-1:])
                 grads = torch.autograd.grad(loss, [param for param in block.parameters()])[0]
@@ -693,88 +701,4 @@ class TrainBaseMethod(ABC):
                 grads_list.append(grads.unsqueeze(0))  # [64, 3, 7, 7] -> [1, 64, 3, 7, 7]
         
         grads_list = torch.cat(grads_list, dim=0)
-        # print(grads_list.shape)
-        return grads_list
-
-    # per-sample hessian
-    def get_hessian(self, test_data, targets):
-        params = {k: v.detach() for k, v in self.model.module.named_parameters()}
-        buffers = {k: v.detach() for k, v in self.model.module.named_buffers()}
-
-        ft_compute_hess = hessian(self.compute_loss)
-        
-        # ft_compute_grad = grad(self.compute_loss)
-        # # Second derivative: Hessian is the Jacobian of the gradients
-        # ft_compute_hess = jacrev(ft_compute_grad)
-
-        ft_compute_sample_hess = vmap(ft_compute_hess, in_dims=(None, None, 0, 0))
-        ft_per_sample_hess = ft_compute_sample_hess(params, buffers, test_data, targets)
-
-        ft_per_sample_hess = torch.cat([g.view(g.shape[0], -1) for g in ft_per_sample_hess.values()], dim=1)
-        return ft_per_sample_hess
-
-    
-    def get_inverse_hvp(self, v, approx_type='cg', approx_params=None, verbose=True):
-        assert approx_type in ['cg', 'lissa']
-        if approx_type == 'lissa':
-            return self.get_inverse_hvp_lissa(v, **approx_params)
-        elif approx_type == 'cg':
-            return self.get_inverse_hvp_cg(v, verbose, **approx_params)
-    
-
-    def get_relevance_by_grad(self, data_loader, sim_func=dotprod, matrix='none', approx_type='cg', approx_params={}):
-        test_grad = self.get_grad_loss(test_data)  #
-        test_grad = test_grad.astype(np.float64)
-        
-        if matrix == 'approx_hessian':
-            test_feature = self.get_inverse_hvp(test_grad, approx_type, approx_params)
-        
-        elif matrix == 'inv-hessian':
-            loss = self.__call__(*convertor(train_data, self.device), enable_double_backprop=True)
-            hessian = self.get_hessian(loss)
-            damped_hessian = hessian + np.mean(np.abs(hessian)) * approx_params.get('damping', 0) * np.identity(hessian.shape[0])
-            inv_hessian = np.linalg.inv(damped_hessian)
-            test_feature = np.matmul(inv_hessian, test_grad)
-        
-        elif matrix == 'inv_sqrt-hessian':
-            inv_hessian_fn = os.path.join(self.out_dir, 'inv-hessian-matrix.npy')
-            inv_hessian = np.load(inv_hessian_fn)
-            inv_sqrt_hessian = scipy.linalg.sqrtm(inv_hessian).real
-            test_feature = np.matmul(inv_sqrt_hessian, test_grad)
-
-            _train_feature_filename = os.path.join(self.out_dir, 'train-grad-on-loss-all.npy')
-            train_features = np.load(_train_feature_filename)
-            train_features = np.matmul(inv_sqrt_hessian, train_features.T).T
-        
-        elif matrix == 'inv-fisher':
-            train_grad_filename = os.path.join(self.out_dir, 'train-grad-on-loss-all.npy')
-            if not os.path.exists(train_grad_filename):
-                _print('must calculate train grads first')
-                sys.exit(1)
-            train_grads = np.load(train_grad_filename)
-            avg_grads = np.average(train_grads, axis=0)
-            fisher_matrix = []
-            for g in avg_grads:
-                fisher_matrix.append(g * avg_grads)
-            fisher = np.vstack(fisher_matrix)
-            damped_fisher = fisher + np.mean(np.abs(fisher)) * approx_params.get('damping', 0) * np.identity(fisher.shape[0])
-            inv_fisher = np.linalg.inv(damped_fisher)
-            test_feature = np.matmul(inv_fisher, test_grad)
-        
-        elif matrix == 'inv_sqrt-fisher':
-            inv_fisher_fn = os.path.join(self.out_dir, 'inv-fisher-matrix.npy')
-            inv_fisher = np.load(inv_fisher_fn)
-            inv_sqrt_fisher = scipy.linalg.sqrtm(inv_fisher).real
-            test_feature = np.matmul(inv_sqrt_fisher, test_grad)
-
-            _train_feature_filename = os.path.join(self.out_dir, 'train-grad-on-loss-all.npy')
-            train_features = np.load(_train_feature_filename)
-            train_features = np.matmul(inv_sqrt_fisher, train_features.T).T
-        
-        elif matrix == 'none':
-            test_feature = test_grad
-        
-        else:
-            sys.exit(1)
-        
-        return 
+        return grads_list, loss_list

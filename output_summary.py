@@ -50,22 +50,29 @@ if __name__ == "__main__":
     # print(len(predict_wrong) / len(minority))
     # print(len(rank_wrong) / len(minority))
     
-    output = pd.read_csv("output_grad_-1_train.csv", index_col=0)
+    # output = pd.read_csv("output_grad_loss_eval_try_2.csv", index_col=0)
+    # g1 = output[(output['labels'] == 0) & (output['aux_labels'] == 0)]
+    # g2 = output[(output['labels'] == 0) & (output['aux_labels'] == 1)]  #
+    # g3 = output[(output['labels'] == 1) & (output['aux_labels'] == 0)]  #
+    # g4 = output[(output['labels'] == 1) & (output['aux_labels'] == 1)]
+
+    # for i, g in enumerate([output, g1, g2, g3, g4]):
+    #     print(f"=====Group {i} {(len(g))}=====")
+    #     print(g['loss'].mean())
+
+    output = pd.read_csv("output_test_grad_loss_feat.csv", index_col=0)
     g1 = output[(output['labels'] == 0) & (output['aux_labels'] == 0)]
     g2 = output[(output['labels'] == 0) & (output['aux_labels'] == 1)]  #
     g3 = output[(output['labels'] == 1) & (output['aux_labels'] == 0)]  #
     g4 = output[(output['labels'] == 1) & (output['aux_labels'] == 1)]
 
+    for col in ["loss", "feat_norm", "grad_norm"]:
+        for i, g in enumerate([output, g1, g2, g3, g4]):
+            print(f"========== {col} ==========")
+            print(f"=====Group {i} {(len(g))}=====")
+            print(g[col].mean())
+    
+    print("========== ACC ==========")
     for i, g in enumerate([output, g1, g2, g3, g4]):
         print(f"=====Group {i} {(len(g))}=====")
-        print(g['feat_norm'].mean())
-
-    output = pd.read_csv("output_grad_-1_train_2.csv", index_col=0)
-    g1 = output[(output['labels'] == 0) & (output['aux_labels'] == 0)]
-    g2 = output[(output['labels'] == 0) & (output['aux_labels'] == 1)]  #
-    g3 = output[(output['labels'] == 1) & (output['aux_labels'] == 0)]  #
-    g4 = output[(output['labels'] == 1) & (output['aux_labels'] == 1)]
-
-    for i, g in enumerate([output, g1, g2, g3, g4]):
-        print(f"=====Group {i} {(len(g))}=====")
-        print(g['feat_norm'].mean())
+        print((g["labels"] == g["predictions"]).mean())

@@ -51,8 +51,9 @@ class WaterbirdsTrain(TrainBaseMethod):
         ])
         self.train_dataset = WaterbirdsDataset(raw_data_path=self.args.dataset_dir, root=os.path.join(
             self.args.base_dir, 'datasets', 'Waterbirds'), split='train', transform=self.transform_train, return_places=True)
+        # shuffle = True
         self.train_loader = torch.utils.data.DataLoader(
-            self.train_dataset, batch_size=self.args.train_batch, shuffle=True, num_workers=self.args.workers)
+            self.train_dataset, batch_size=self.args.train_batch, shuffle=False, num_workers=self.args.workers)
         self.val_dataset = WaterbirdsDataset(raw_data_path=self.args.dataset_dir, root=os.path.join(
             self.args.base_dir, 'datasets', 'Waterbirds'), split='val', transform=self.transform_test, return_places=True)
         self.data_to_mask_dataset = WaterbirdsDataset(raw_data_path=self.args.dataset_dir, root=os.path.join(
@@ -72,11 +73,14 @@ class WaterbirdsTrain(TrainBaseMethod):
             self.model.train()
         else:
             self.model.eval()
+
+        ###
         losses = AverageMeter()
         accuracies = AverageMeter()
         all_predictions = []
         all_aux_labels = []
         all_labels = []
+        
         with torch.set_grad_enabled(mode == Mode.train):
             progress_bar = tqdm(data_loader)
             self.logger.info(
@@ -108,11 +112,11 @@ class WaterbirdsTrain(TrainBaseMethod):
         all_aux_labels = torch.cat(all_aux_labels)
         all_labels = torch.cat(all_labels)
         ###
+            
         train_labels = []
         train_aux_labels = []
-        for data in self.train_loader:
+        for i, data in enumerate(self.train_loader):
             labels, aux_labels = data[2], data[-1]
-            # labels, aux_labels = labels.to(self.device), aux_labels.to(self.device)
             train_labels.append(labels)
             train_aux_labels.append(aux_labels)
         train_labels = torch.cat(train_labels)
@@ -120,9 +124,9 @@ class WaterbirdsTrain(TrainBaseMethod):
 
         if self.args.print_detail:
             d = {}
-            # d['labels'] = all_labels.cpu()
-            # d['predictions'] = all_predictions.cpu()
-            # d['aux_labels'] = all_aux_labels.cpu()
+            d['labels'] = all_labels.cpu()
+            d['predictions'] = all_predictions.cpu()
+            d['aux_labels'] = all_aux_labels.cpu()
 
             # similarity
             # similarity_l2sim = self.get_relevance_by_hsim(data_loader, sim_func=l2sim, if_grad=True)
@@ -140,40 +144,42 @@ class WaterbirdsTrain(TrainBaseMethod):
             #     d['train_rank_top_aux_label_' + name] = train_rank_top_aux_label
             
             # feature norm
-            feat_norm = self.feat_norm(self.train_loader, if_grad=True, flatten=False)
+            grad_norm, loss = self.feat_norm(self.test_loader, if_grad=True, flatten=False)
+            feat_norm = self.feat_norm(self.test_loader, if_grad=False, flatten=False)
 
-            d['labels'] = train_labels.cpu()
-            d['aux_labels'] = train_aux_labels.cpu()
+            # d['labels'] = train_labels.cpu()
+            # d['aux_labels'] = train_aux_labels.cpu()
 
-            # feat_norm = self.feat_norm(self.train_loader)
+            d['grad_norm'] = grad_norm.cpu()
             d['feat_norm'] = feat_norm.cpu()
+            d['loss'] = loss
 
             df = pd.DataFrame(d)
-            df.to_csv('output_grad_-1_train_2.csv', index=True)
+            df.to_csv('output_test_grad_loss_feat.csv', index=True)
             
 
-        groups = {
-            0: [],
-            1: [],
-            2: [],
-            3: [],
-        }
-        for aux_label, label, prediction in zip(all_aux_labels, all_labels, all_predictions):
-            groups[2*aux_label.item()+label.item()].append(label.item()
-                                                           == prediction.item())
-        weighted_acc = 0
-        accuracies = []
-        for group_id, group_predictions in groups.items():
-            if len(group_predictions) == 0:
-                accuracy = 0
-            else: 
-                accuracy = sum(group_predictions)/len(group_predictions)
-            accuracies.append(accuracy)
-            self.logger.info(f"accuracy of group {group_id+1} ({len(group_predictions)}): {accuracy}", print_msg=True)
-            weighted_acc += accuracy*len(group_predictions)
-        weighted_acc /= len(all_predictions)
-        self.logger.info(f"average accuracy: {weighted_acc}", print_msg=True)
-        return min(accuracies)
+        # groups = {
+        #     0: [],
+        #     1: [],
+        #     2: [],
+        #     3: [],
+        # }
+        # for aux_label, label, prediction in zip(all_aux_labels, all_labels, all_predictions):
+        #     groups[2*aux_label.item()+label.item()].append(label.item()
+        #                                                    == prediction.item())
+        # weighted_acc = 0
+        # accuracies = []
+        # for group_id, group_predictions in groups.items():
+        #     if len(group_predictions) == 0:
+        #         accuracy = 0
+        #     else: 
+        #         accuracy = sum(group_predictions)/len(group_predictions)
+        #     accuracies.append(accuracy)
+        #     self.logger.info(f"accuracy of group {group_id+1} ({len(group_predictions)}): {accuracy}", print_msg=True)
+        #     weighted_acc += accuracy*len(group_predictions)
+        # weighted_acc /= len(all_predictions)
+        # self.logger.info(f"average accuracy: {weighted_acc}", print_msg=True)
+        return 0 #min(accuracies)
 
     def test(self, checkpoint_path=None):
         assert checkpoint_path is not None, "checkpoint path should be passed to the test function to test on that"

@@ -11,7 +11,7 @@ def add_basic_args(parser: ArgumentParser) -> ArgumentParser:
     )
     parser.add_argument(
         "--workers",
-        default=8,
+        default=6,
         type=int,
         metavar="N",
         help="number of data loading workers (default: 4)",
